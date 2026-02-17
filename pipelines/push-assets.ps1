@@ -1,45 +1,78 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
-$repo = "$HOME\fenix-assets"
+$repo    = "$HOME\fenix-assets"
 $staging = "C:\app-logos"
 
 Set-Location $repo
 
-$files = Get-ChildItem $staging -File
-if (!$files) { exit }
+$files = Get-ChildItem $staging -File | Where-Object {
+  $_.Extension.ToLower() -in @(".webp",".png",".jpg",".jpeg",".svg")
+}
+
+if (!$files) { 
+  Write-Host "No assets in staging folder."
+  exit 
+}
+
+$rawUrls = @()
 
 foreach ($file in $files) {
 
-    $name = $file.Name.ToLower()
+    # force lowercase filenames for predictable GitHub URLs
+    $lowerName = $file.Name.ToLower()
+    if ($file.Name -ne $lowerName) {
+        Rename-Item -Path $file.FullName -NewName $lowerName -Force
+        $file = Get-Item (Join-Path $staging $lowerName)
+    }
 
+    $name = $file.Name
+
+    # route by app keyword in filename
     if ($name -like "*kaboozi*") {
-        $dest = "apps/kaboozi/logos/$name"
+        $destRel = "apps/kaboozi/logos/$name"
+    }
+    elseif ($name -like "*ai-geek-hub*" -or $name -like "*aigeekhub*") {
+        $destRel = "apps/ai-geek-hub/logos/$name"
     }
     elseif ($name -like "*sentix*") {
-        $dest = "apps/sentix/logos/$name"
+        $destRel = "apps/sentix/logos/$name"
     }
     elseif ($name -like "*havoc*") {
-        $dest = "apps/havoc/logos/$name"
+        $destRel = "apps/havoc/logos/$name"
     }
     elseif ($name -like "*profitlinkz*") {
-        $dest = "apps/profitlinkz/logos/$name"
+        $destRel = "apps/profitlinkz/logos/$name"
     }
     else {
-        $dest = "shared/logos/$name"
+        $destRel = "shared/logos/$name"
     }
 
-    $fullDest = Join-Path $repo $dest
-    Move-Item $file.FullName $fullDest -Force
+    $destAbs = Join-Path $repo $destRel
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destAbs) | Out-Null
 
-    Write-Host "Moved → $dest"
+    Move-Item -Path $file.FullName -Destination $destAbs -Force
+    Write-Host "Moved -> $destRel"
+
+    $rawUrls += $destRel
 }
 
-git add .
-git commit -m "auto asset push"
-git push
+git add . | Out-Null
 
-$user = (& gh api user --jq ".login")
+# commit only if staged changes exist
+git diff --cached --quiet
+if ($LASTEXITCODE -eq 0) {
+  Write-Host "No changes to commit."
+} else {
+  git commit -m "auto asset push" | Out-Null
+  git push | Out-Null
+}
+
+$user = (& gh api user --jq ".login").Trim()
+$repoName = "fenix-assets"
+
 Write-Host ""
-Write-Host "RAW URL:"
-Write-Host "https://raw.githubusercontent.com/$user/fenix-assets/main/$dest"
+Write-Host "RAW URLs:"
+foreach ($rel in ($rawUrls | Sort-Object -Unique)) {
+  Write-Host "https://raw.githubusercontent.com/$user/$repoName/main/$rel"
+}
 Write-Host ""
