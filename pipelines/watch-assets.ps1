@@ -1,46 +1,82 @@
-﻿$ErrorActionPreference = "Stop"
+[CmdletBinding()]
+param(
+  [string]$StagingPath = 'C:\app-logos',
+  [string]$PushScript = '',
+  [string]$BasePushScript = '',
+  [string]$LogPath = '',
+  [int]$PollSeconds = 5,
+  [int]$StableChecks = 5,
+  [int]$StableDelayMs = 300
+)
 
-$staging  = "C:\app-logos"
-$pipeline = "$HOME\fenix-assets\pipelines\push-assets.ps1"
+$ErrorActionPreference = 'Stop'
 
-Write-Host "👀 Watching: $staging"
-Write-Host "🚀 Pipeline: $pipeline"
-Write-Host "Drop an image into C:\app-logos to auto-push."
+$scriptDir = Split-Path -Path $MyInvocation.MyCommand.Path -Parent
+if ([string]::IsNullOrWhiteSpace($PushScript)) { $PushScript = Join-Path $scriptDir 'push-assets.pro.ps1' }
+if ([string]::IsNullOrWhiteSpace($BasePushScript)) { $BasePushScript = Join-Path $scriptDir 'push-assets.ps1' }
+if ([string]::IsNullOrWhiteSpace($LogPath)) { $LogPath = Join-Path $scriptDir 'logs\watch-assets.log' }
 
-function Wait-ForFileReady([string]$path) {
-  for ($i = 0; $i -lt 40; $i++) {
+function Ensure-Folder([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) {
+    New-Item -ItemType Directory -Path $Path -Force | Out-Null
+  }
+}
+
+function Log([string]$Message) {
+  Ensure-Folder (Split-Path -Path $LogPath -Parent)
+  Add-Content -Path $LogPath -Value ("[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message)
+}
+
+function Test-FileStable([string]$Path) {
+  $lastLen = -1
+  $stable = 0
+  for ($i=0; $i -lt 80; $i++) {
     try {
-      $fs = [System.IO.File]::Open($path,'Open','Read','None')
+      $fi = Get-Item -LiteralPath $Path -ErrorAction Stop
+      $len = $fi.Length
+      $fs = [System.IO.File]::Open($Path,[System.IO.FileMode]::Open,[System.IO.FileAccess]::Read,[System.IO.FileShare]::Read)
       $fs.Close()
-      return $true
+
+      if ($len -eq $lastLen) { $stable++ } else { $stable = 0 }
+      $lastLen = $len
+      if ($stable -ge $StableChecks) { return $true }
     } catch {
-      Start-Sleep -Milliseconds 350
+      $stable = 0
     }
+    Start-Sleep -Milliseconds $StableDelayMs
   }
   return $false
 }
 
-$fsw = New-Object System.IO.FileSystemWatcher
-$fsw.Path = $staging
-$fsw.Filter = "*.*"
-$fsw.IncludeSubdirectories = $false
-$fsw.EnableRaisingEvents = $true
+Ensure-Folder $StagingPath
+Ensure-Folder (Split-Path -Path $LogPath -Parent)
+Log ("watcher start | staging={0} push={1}" -f $StagingPath, $PushScript)
 
-Register-ObjectEvent -InputObject $fsw -EventName Created -SourceIdentifier "AssetCreated" -Action {
-  $p = $Event.SourceEventArgs.FullPath
-  Start-Sleep -Milliseconds 250
+$supported = @('.webp','.png','.jpg','.jpeg','.svg')
 
-  if (Test-Path $p) {
-    Write-Host "📦 Detected: $p"
+while ($true) {
+  try {
+    $files = Get-ChildItem -LiteralPath $StagingPath -File -ErrorAction SilentlyContinue | Where-Object { $supported -contains $_.Extension.ToLower() }
 
-    if (Wait-ForFileReady $p) {
-      Write-Host "✅ File ready. Running pipeline..."
-      powershell -NoProfile -ExecutionPolicy Bypass -File $using:pipeline
-      Write-Host "🏁 Pipeline finished."
-    } else {
-      Write-Host "⚠️ File never became ready: $p"
+    if ($files -and $files.Count -gt 0) {
+      $ready = $false
+      foreach ($f in $files) {
+        if (Test-FileStable -Path $f.FullName) { $ready = $true; break }
+      }
+
+      if ($ready) {
+        Log ("detected {0} candidate file(s) | running pipeline" -f $files.Count)
+        $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $PushScript -ConvertToWebp -WebpQuality 82 -StagingPath $StagingPath -BasePushScript $BasePushScript -ResizeWidths '256,512,1024,2048' 2>&1
+        foreach ($line in $out) { Add-Content -Path $LogPath -Value ($line.ToString()) }
+
+        if ($LASTEXITCODE -ne 0) { Log ("pipeline exit code={0}" -f $LASTEXITCODE) }
+        Start-Sleep -Seconds 2
+      }
     }
+  } catch {
+    Log ("ERROR: {0}" -f $_.Exception.Message)
+    Start-Sleep -Seconds 2
   }
-} | Out-Null
 
-while ($true) { Start-Sleep 2 }
+  Start-Sleep -Seconds $PollSeconds
+}
