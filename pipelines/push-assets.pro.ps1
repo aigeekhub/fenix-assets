@@ -166,7 +166,7 @@ if ($baseExitCode -ne 0) {
 }
 
 # URL extraction
-$rawUrlRegex = 'https://raw\.githubusercontent\.com/[^\s"]+'
+$rawUrlRegex = 'https://raw\.githubusercontent\.com/.+'
 $allUrls = @()
 foreach ($line in $baseOutput) {
   $matches = [regex]::Matches($line.ToString(), $rawUrlRegex)
@@ -179,4 +179,5 @@ foreach ($u in $allUrls) {
 }
 
 Log ("end | urls={0}" -f $allUrls.Count)
+
 
