@@ -31,7 +31,22 @@ function Log([string]$Message) {
 
 function Log-Url([string]$FileName, [string]$Url) {
   Ensure-Folder (Split-Path -Path $UrlsLogPath -Parent)
-  Add-Content -Path $UrlsLogPath -Value ("[{0}] {1}`t{2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $FileName, $Url)
+
+  if (Test-Path -LiteralPath $UrlsLogPath) {
+    $already = Select-String -Path $UrlsLogPath -SimpleMatch -Pattern ("Raw URL   : " + $Url) -Quiet
+    if ($already) { return }
+  }
+
+  if (-not (Test-Path -LiteralPath $UrlsLogPath)) {
+    Add-Content -Path $UrlsLogPath -Value "ASSET URL DATABASE"
+    Add-Content -Path $UrlsLogPath -Value "=================="
+    Add-Content -Path $UrlsLogPath -Value ""
+  }
+
+  Add-Content -Path $UrlsLogPath -Value ("Date      : {0}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+  Add-Content -Path $UrlsLogPath -Value ("Image File: {0}" -f $FileName)
+  Add-Content -Path $UrlsLogPath -Value ("Raw URL   : {0}" -f $Url)
+  Add-Content -Path $UrlsLogPath -Value "----------------------------------------"
 }
 
 function Normalize-Widths([string[]]$Raw) {
@@ -179,6 +194,7 @@ foreach ($u in $allUrls) {
 }
 
 Log ("end | urls={0}" -f $allUrls.Count)
+
 
 
 
