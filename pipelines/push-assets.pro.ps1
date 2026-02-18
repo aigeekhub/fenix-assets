@@ -18,6 +18,19 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Add-ContentSafe([string]$Path,[string]$Value,[int]$Retries=20,[int]$DelayMs=100) {
+  for($i=0;$i -lt $Retries;$i++){
+    try {
+      Add-Content -Path $Path -Value $Value
+      return $true
+    } catch {
+      Start-Sleep -Milliseconds $DelayMs
+    }
+  }
+  return $false
+}
+
+
 function Ensure-Folder([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path)) {
     New-Item -ItemType Directory -Path $Path -Force | Out-Null
@@ -26,7 +39,7 @@ function Ensure-Folder([string]$Path) {
 
 function Log([string]$Message) {
   Ensure-Folder (Split-Path -Path $PipelineLogPath -Parent)
-  Add-Content -Path $PipelineLogPath -Value ("[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message)
+  [void](Add-ContentSafe -Path $PipelineLogPath -Value ("[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message))
 }
 
 function Log-Url([string]$FileName, [string]$Url) {
@@ -38,15 +51,15 @@ function Log-Url([string]$FileName, [string]$Url) {
   }
 
   if (-not (Test-Path -LiteralPath $UrlsLogPath)) {
-    Add-Content -Path $UrlsLogPath -Value "ASSET URL DATABASE"
-    Add-Content -Path $UrlsLogPath -Value "=================="
-    Add-Content -Path $UrlsLogPath -Value ""
+    [void](Add-ContentSafe -Path $UrlsLogPath -Value "ASSET URL DATABASE")
+    [void](Add-ContentSafe -Path $UrlsLogPath -Value "==================")
+    [void](Add-ContentSafe -Path $UrlsLogPath -Value "")
   }
 
-  Add-Content -Path $UrlsLogPath -Value ("Date      : {0}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
-  Add-Content -Path $UrlsLogPath -Value ("Image File: {0}" -f $FileName)
-  Add-Content -Path $UrlsLogPath -Value ("Raw URL   : {0}" -f $Url)
-  Add-Content -Path $UrlsLogPath -Value "----------------------------------------"
+  [void](Add-ContentSafe -Path $UrlsLogPath -Value ("Date      : {0}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')))
+  [void](Add-ContentSafe -Path $UrlsLogPath -Value ("Image File: {0}" -f $FileName))
+  [void](Add-ContentSafe -Path $UrlsLogPath -Value ("Raw URL   : {0}" -f $Url))
+  [void](Add-ContentSafe -Path $UrlsLogPath -Value "----------------------------------------")
 }
 function Copy-UrlsToClipboard([string[]]$Urls) {
   if (-not $Urls -or $Urls.Count -eq 0) { return }
@@ -201,7 +214,7 @@ $baseOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $BasePus
 $baseExitCode = $LASTEXITCODE
 $ErrorActionPreference = $prevEap
 foreach ($line in $baseOutput) {
-  Add-Content -Path $PipelineLogPath -Value ($line.ToString())
+  [void](Add-ContentSafe -Path $PipelineLogPath -Value ($line.ToString()))
 }
 if ($baseExitCode -ne 0) {
   Log ("base push exited with code {0}" -f $baseExitCode)
