@@ -48,6 +48,33 @@ function Log-Url([string]$FileName, [string]$Url) {
   Add-Content -Path $UrlsLogPath -Value ("Raw URL   : {0}" -f $Url)
   Add-Content -Path $UrlsLogPath -Value "----------------------------------------"
 }
+function Copy-UrlsToClipboard([string[]]$Urls) {
+  if (-not $Urls -or $Urls.Count -eq 0) { return }
+  $payload = ($Urls -join [Environment]::NewLine)
+  try {
+    Set-Clipboard -Value $payload
+    return
+  } catch {
+    try {
+      $payload | clip.exe
+      return
+    } catch {
+      Log ("clipboard copy failed: {0}" -f $_.Exception.Message)
+    }
+  }
+}
+
+function Notify-User([string]$Message) {
+  if ([string]::IsNullOrWhiteSpace($Message)) { return }
+
+  # Lightweight popup in user session; non-fatal if unavailable.
+  try {
+    msg.exe $env:USERNAME /time:5 $Message | Out-Null
+  } catch {
+    Log ("notification failed: {0}" -f $_.Exception.Message)
+  }
+}
+
 
 function Normalize-Widths([string[]]$Raw) {
   $list = New-Object System.Collections.Generic.List[int]
@@ -194,6 +221,7 @@ foreach ($u in $allUrls) {
 }
 
 Log ("end | urls={0}" -f $allUrls.Count)
+
 
 
 
