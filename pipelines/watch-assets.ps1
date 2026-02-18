@@ -4,12 +4,18 @@ param(
   [string]$PushScript = '',
   [string]$BasePushScript = '',
   [string]$LogPath = '',
-  [int]$PollSeconds = 5,
+  [int]$DebounceMs = 1200,
   [int]$StableChecks = 5,
   [int]$StableDelayMs = 300
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Single-instance lock to prevent duplicate watcher processes.
+$mutexName = 'Global\FENIX.AssetPipeline.Watcher'
+$createdNew = $false
+$mutex = New-Object System.Threading.Mutex($true, $mutexName, [ref]$createdNew)
+if (-not $createdNew) { exit 0 }
 
 $scriptDir = Split-Path -Path $MyInvocation.MyCommand.Path -Parent
 if ([string]::IsNullOrWhiteSpace($PushScript)) { $PushScript = Join-Path $scriptDir 'push-assets.pro.ps1' }
@@ -50,33 +56,63 @@ function Test-FileStable([string]$Path) {
 
 Ensure-Folder $StagingPath
 Ensure-Folder (Split-Path -Path $LogPath -Parent)
-Log ("watcher start | staging={0} push={1}" -f $StagingPath, $PushScript)
 
 $supported = @('.webp','.png','.jpg','.jpeg','.svg')
+$busy = $false
 
-while ($true) {
-  try {
-    $files = Get-ChildItem -LiteralPath $StagingPath -File -ErrorAction SilentlyContinue | Where-Object { $supported -contains $_.Extension.ToLower() }
+$fsw = New-Object System.IO.FileSystemWatcher
+$fsw.Path = $StagingPath
+$fsw.Filter = '*.*'
+$fsw.IncludeSubdirectories = $false
+$fsw.NotifyFilter = [System.IO.NotifyFilters]'FileName, LastWrite, Size'
+$fsw.EnableRaisingEvents = $true
 
-    if ($files -and $files.Count -gt 0) {
+Register-ObjectEvent -InputObject $fsw -EventName Created -SourceIdentifier 'FENIX.AssetDrop' | Out-Null
+
+Log ("watcher start | staging={0} push={1}" -f $StagingPath, $PushScript)
+
+try {
+  while ($true) {
+    $evt = Wait-Event -SourceIdentifier 'FENIX.AssetDrop' -Timeout 30
+    if (-not $evt) { continue }
+
+    # Drain queued burst events.
+    Remove-Event -SourceIdentifier 'FENIX.AssetDrop' -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds $DebounceMs
+
+    if ($busy) { continue }
+    $busy = $true
+
+    try {
+      $files = Get-ChildItem -LiteralPath $StagingPath -File -ErrorAction SilentlyContinue | Where-Object { $supported -contains $_.Extension.ToLower() }
+      if (-not $files -or $files.Count -eq 0) { continue }
+
       $ready = $false
       foreach ($f in $files) {
         if (Test-FileStable -Path $f.FullName) { $ready = $true; break }
       }
+      if (-not $ready) { continue }
 
-      if ($ready) {
-        Log ("detected {0} candidate file(s) | running pipeline" -f $files.Count)
-        $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $PushScript -ConvertToWebp -WebpQuality 82 -StagingPath $StagingPath -BasePushScript $BasePushScript -ResizeWidths '256,512,1024,2048' 2>&1
-        foreach ($line in $out) { Add-Content -Path $LogPath -Value ($line.ToString()) }
+      Log ("detected {0} candidate file(s) | running pipeline" -f $files.Count)
+      $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $PushScript -ConvertToWebp -WebpQuality 82 -StagingPath $StagingPath -BasePushScript $BasePushScript -ResizeWidths '256,512,1024,2048' 2>&1
+      foreach ($line in $out) { Add-Content -Path $LogPath -Value ($line.ToString()) }
 
-        if ($LASTEXITCODE -ne 0) { Log ("pipeline exit code={0}" -f $LASTEXITCODE) }
-        Start-Sleep -Seconds 2
-      }
+      if ($LASTEXITCODE -ne 0) { Log ("pipeline exit code={0}" -f $LASTEXITCODE) }
+
+      # Clear any generated-event backlog after processing.
+      Remove-Event -SourceIdentifier 'FENIX.AssetDrop' -ErrorAction SilentlyContinue
+    } catch {
+      Log ("ERROR: {0}" -f $_.Exception.Message)
+    } finally {
+      $busy = $false
     }
-  } catch {
-    Log ("ERROR: {0}" -f $_.Exception.Message)
-    Start-Sleep -Seconds 2
   }
-
-  Start-Sleep -Seconds $PollSeconds
+} finally {
+  Unregister-Event -SourceIdentifier 'FENIX.AssetDrop' -ErrorAction SilentlyContinue
+  $fsw.EnableRaisingEvents = $false
+  $fsw.Dispose()
+  try { $mutex.ReleaseMutex() | Out-Null } catch {}
+  $mutex.Dispose()
+  Log 'watcher stopped'
 }
+
