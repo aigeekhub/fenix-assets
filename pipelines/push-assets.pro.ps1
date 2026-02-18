@@ -8,8 +8,8 @@ param(
   [string]$ExportMode = "suffix", # suffix | subfolders
   [switch]$KeepLocalCopy = $true,
   [string]$KeepDir = "C:\app-logos\_keep",
-  [string]$PipelineLogPath = "$env:USERPROFILE\fenix-assets\pipelines\logs\pipeline.log",
-  [string]$UrlsLogPath = "$env:USERPROFILE\fenix-assets\pipelines\logs\urls.log",
+  [string]$PipelineLogPath = "C:\app-logos\logs.txt",
+  [string]$UrlsLogPath = "C:\app-logos\url database.txt",
 
   # keep last: allows -ResizeWidths 256 512 1024 2048 OR "256,512,1024,2048"
   [Parameter(ValueFromRemainingArguments = $true)]
@@ -179,5 +179,7 @@ foreach ($u in $allUrls) {
 }
 
 Log ("end | urls={0}" -f $allUrls.Count)
+
+
 
 
