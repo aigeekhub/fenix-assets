@@ -99,7 +99,7 @@ if(($ConvertToWebp.IsPresent -or $ResizeWidthsInt.Count -gt 0) -and -not (Get-Co
 $exts=@('.webp','.png','.jpg','.jpeg','.svg')
 $files=Get-ChildItem -LiteralPath $StagingPath -Recurse -File | Where-Object {
   $_.Extension.ToLower() -in $exts -and
-  $_.FullName -notlike "$StagingPath\\_keep\\*" -and
+  $_.FullName -notlike "$StagingPath\_keep\*" -and
   $_.BaseName -notmatch '_w\d+($|_)' -and
   $_.Name -notin @('logs.txt','url database.txt')
 }
@@ -160,3 +160,4 @@ if($clipOk){ Log ("clipboard copied urls={0}" -f $allUrls.Count) } else { Log 'c
 if($allUrls.Count -gt 0){ [void](Show-Notification -Title 'FENIX Asset Pipeline' -Message ("Uploaded {0} URL(s). Clipboard ready." -f $allUrls.Count)) }
 
 Log ("end | urls={0}" -f $allUrls.Count)
+

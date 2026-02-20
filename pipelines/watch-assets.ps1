@@ -32,7 +32,7 @@ $seen = @{}
 
 $existing = Get-ChildItem -LiteralPath $StagingPath -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
   $supported -contains $_.Extension.ToLower() -and
-  $_.FullName -notlike "$StagingPath\\_keep\\*" -and
+  $_.FullName -notlike "$StagingPath\_keep\*" -and
   $_.BaseName -notmatch '_w\d+($|_)' -and
   $_.Name -notin @('logs.txt','url database.txt')
 }
@@ -44,7 +44,7 @@ while($true){
   try{
     $files=Get-ChildItem -LiteralPath $StagingPath -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
       $supported -contains $_.Extension.ToLower() -and
-      $_.FullName -notlike "$StagingPath\\_keep\\*" -and
+      $_.FullName -notlike "$StagingPath\_keep\*" -and
       $_.BaseName -notmatch '_w\d+($|_)' -and
       $_.Name -notin @('logs.txt','url database.txt')
     }
@@ -76,4 +76,5 @@ while($true){
   } catch { Log ("ERROR: {0}" -f $_.Exception.Message) }
   Start-Sleep -Seconds $PollSeconds
 }
+
 
