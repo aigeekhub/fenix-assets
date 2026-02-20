@@ -25,26 +25,55 @@ function Test-FileStable([string]$Path){ $last=-1;$stable=0; for($i=0;$i -lt 80;
 
 Ensure-Folder $StagingPath
 Ensure-Folder (Split-Path -Path $LogPath -Parent)
-Log ("watcher start | staging={0} push={1}" -f $StagingPath,$PushScript)
+$startedAt = Get-Date
 
 $supported=@('.webp','.png','.jpg','.jpeg','.svg')
+$seen = @{}
+
+$existing = Get-ChildItem -LiteralPath $StagingPath -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+  $supported -contains $_.Extension.ToLower() -and
+  $_.FullName -notlike "$StagingPath\\_keep\\*" -and
+  $_.BaseName -notmatch '_w\d+($|_)' -and
+  $_.Name -notin @('logs.txt','url database.txt')
+}
+foreach($f in $existing){ $seen[$f.FullName] = $f.LastWriteTimeUtc.Ticks }
+
+Log ("watcher start | staging={0} push={1} seeded={2}" -f $StagingPath,$PushScript,$seen.Count)
+
 while($true){
   try{
-    $files=Get-ChildItem -LiteralPath $StagingPath -File -ErrorAction SilentlyContinue | Where-Object {
+    $files=Get-ChildItem -LiteralPath $StagingPath -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
       $supported -contains $_.Extension.ToLower() -and
+      $_.FullName -notlike "$StagingPath\\_keep\\*" -and
       $_.BaseName -notmatch '_w\d+($|_)' -and
       $_.Name -notin @('logs.txt','url database.txt')
     }
-    if($files -and $files.Count -gt 0){
+
+    $newCandidates = @()
+    foreach($f in $files){
+      $tick = $f.LastWriteTimeUtc.Ticks
+      if($seen.ContainsKey($f.FullName)){
+        if($seen[$f.FullName] -ne $tick){ $newCandidates += $f }
+      } else {
+        $newCandidates += $f
+      }
+    }
+
+    if($newCandidates.Count -gt 0){
       $ready=$false
-      foreach($f in $files){ if(Test-FileStable $f.FullName){ $ready=$true; break } }
+      foreach($f in $newCandidates){ if(Test-FileStable $f.FullName){ $ready=$true; break } }
       if($ready){
-        Log ("detected {0} candidate file(s) | running pipeline" -f $files.Count)
+        Log ("detected {0} NEW file(s) | running pipeline" -f $newCandidates.Count)
         $out=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $PushScript -ConvertToWebp -WebpQuality 82 -StagingPath $StagingPath -BasePushScript $BasePushScript -ResizeWidths '256,512,1024,2048' 2>&1
         foreach($line in $out){ Add-Content -Path $LogPath -Value ($line.ToString()) }
         Start-Sleep -Seconds 2
       }
     }
+
+    $seen = @{}
+    foreach($f in $files){ $seen[$f.FullName] = $f.LastWriteTimeUtc.Ticks }
+
   } catch { Log ("ERROR: {0}" -f $_.Exception.Message) }
   Start-Sleep -Seconds $PollSeconds
 }
+

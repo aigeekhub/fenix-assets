@@ -33,11 +33,62 @@ function Log-Url([string]$FileName,[string]$Url){
 }
 
 function Normalize-Widths([string[]]$Raw){ $list=New-Object System.Collections.Generic.List[int]; foreach($t in $Raw){ if($null -eq $t){continue}; foreach($p in ($t -split '[,\s]+' | ?{$_})){ try{ [int]$w=$p; if($w -gt 0){$list.Add($w)} } catch{} } }; $out=$list.ToArray()|Sort-Object -Unique; if(-not $out -or $out.Count -eq 0){$out=@(256,512,1024,2048)}; return ,$out }
-function To-LowercaseFileName([string]$FullPath){ $dir=Split-Path $FullPath -Parent; $name=Split-Path $FullPath -Leaf; $low=$name.ToLower(); if($name -eq $low){ return $FullPath }; $target=Join-Path $dir $low; if(Test-Path -LiteralPath $target){ $base=[IO.Path]::GetFileNameWithoutExtension($low); $ext=[IO.Path]::GetExtension($low); $target=Join-Path $dir ("{0}_{1}{2}" -f $base,(Get-Date -Format 'yyyyMMdd_HHmmssfff'),$ext) }; Rename-Item -LiteralPath $FullPath -NewName (Split-Path $target -Leaf) -Force; return $target }
-function Export-Path([string]$BaseName,[int]$Width,[string]$Ext){ $b=$BaseName.ToLower(); $e=$Ext.ToLower(); if($ExportMode -eq 'subfolders'){ $d=Join-Path $StagingPath $Width; Ensure-Folder $d; return Join-Path $d ($b+$e) }; return Join-Path $StagingPath ("{0}_w{1}{2}" -f $b,$Width,$e) }
+function Normalize-AssetName([string]$Name){
+  $n = $Name.ToLower()
+  $n = $n -replace '\s+','-'
+  $n = $n -replace '[^a-z0-9._-]','-'
+  $n = $n -replace '-{2,}','-'
+  return $n.Trim('-')
+}
+function Normalize-AssetFileName([string]$FullPath){
+  $dir=Split-Path $FullPath -Parent
+  $name=Split-Path $FullPath -Leaf
+  $norm=Normalize-AssetName $name
+  if($name -eq $norm){ return $FullPath }
+  $target=Join-Path $dir $norm
+  if(Test-Path -LiteralPath $target){ $base=[IO.Path]::GetFileNameWithoutExtension($norm); $ext=[IO.Path]::GetExtension($norm); $target=Join-Path $dir ("{0}_{1}{2}" -f $base,(Get-Date -Format 'yyyyMMdd_HHmmssfff'),$ext) }
+  Rename-Item -LiteralPath $FullPath -NewName (Split-Path $target -Leaf) -Force
+  return $target
+}
+function Export-Path([string]$OriginalFullPath,[int]$Width,[string]$Ext,[string]$StagingRoot){
+  $dir = Split-Path $OriginalFullPath -Parent
+  $base = [IO.Path]::GetFileNameWithoutExtension($OriginalFullPath)
+  $base = Normalize-AssetName $base
+  $e = $Ext.ToLower()
+  if($ExportMode -eq 'subfolders'){
+    $d=Join-Path $dir $Width
+    Ensure-Folder $d
+    return Join-Path $d ($base+$e)
+  }
+  return Join-Path $dir ("{0}_w{1}{2}" -f $base,$Width,$e)
+}
 
-function Copy-UrlsToClipboard([string[]]$Urls){ if(-not $Urls -or $Urls.Count -eq 0){ return }; $payload=($Urls -join [Environment]::NewLine); try{ Set-Clipboard -Value $payload; return } catch { try{ $payload | clip.exe | Out-Null; return } catch { Log ("clipboard copy failed: {0}" -f $_.Exception.Message) } } }
-function Notify-User([string]$Message){ if([string]::IsNullOrWhiteSpace($Message)){ return }; try{ msg.exe $env:USERNAME /time:5 $Message | Out-Null } catch { Log ("notification failed: {0}" -f $_.Exception.Message) } }
+function Copy-UrlsToClipboard([string[]]$Urls){
+  if(-not $Urls -or $Urls.Count -eq 0){ return $false }
+  $payload=($Urls -join [Environment]::NewLine)
+  try{ Set-Clipboard -Value $payload; return $true } catch {}
+  try{ $payload | clip.exe | Out-Null; return $true } catch {}
+  return $false
+}
+
+function Show-Notification([string]$Title,[string]$Message){
+  try{
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+    $ni = New-Object System.Windows.Forms.NotifyIcon
+    $ni.Icon = [System.Drawing.SystemIcons]::Information
+    $ni.BalloonTipTitle = $Title
+    $ni.BalloonTipText = $Message
+    $ni.Visible = $true
+    $ni.ShowBalloonTip(5000)
+    Start-Sleep -Milliseconds 1200
+    $ni.Dispose()
+    return $true
+  } catch {
+    Log ("notification failed: {0}" -f $_.Exception.Message)
+    return $false
+  }
+}
 
 $ResizeWidthsInt = Normalize-Widths $ResizeWidths
 $ExportMode = $ExportMode.ToLower(); if($ExportMode -ne 'suffix' -and $ExportMode -ne 'subfolders'){ $ExportMode='suffix' }
@@ -46,8 +97,9 @@ if(-not (Test-Path -LiteralPath $BasePushScript)){ throw "BasePushScript not fou
 if(($ConvertToWebp.IsPresent -or $ResizeWidthsInt.Count -gt 0) -and -not (Get-Command magick -ErrorAction SilentlyContinue)){ throw 'ImageMagick not found (magick.exe).' }
 
 $exts=@('.webp','.png','.jpg','.jpeg','.svg')
-$files=Get-ChildItem -LiteralPath $StagingPath -File | Where-Object {
+$files=Get-ChildItem -LiteralPath $StagingPath -Recurse -File | Where-Object {
   $_.Extension.ToLower() -in $exts -and
+  $_.FullName -notlike "$StagingPath\\_keep\\*" -and
   $_.BaseName -notmatch '_w\d+($|_)' -and
   $_.Name -notin @('logs.txt','url database.txt')
 }
@@ -55,17 +107,25 @@ if(-not $files){ Log 'Nothing to process.'; return }
 
 Log ("start | files={0} mode={1} widths={2} webp={3}" -f $files.Count,$ExportMode,($ResizeWidthsInt -join ','),$ConvertToWebp)
 
-$files = $files | ForEach-Object { Get-Item -LiteralPath (To-LowercaseFileName $_.FullName) }
+$files = $files | ForEach-Object { Get-Item -LiteralPath (Normalize-AssetFileName $_.FullName) }
 
-if($KeepLocalCopy){ Ensure-Folder $KeepDir; foreach($f in $files){ Copy-Item -LiteralPath $f.FullName -Destination (Join-Path $KeepDir $f.Name) -Force; Log ("kept local copy: {0}" -f (Join-Path $KeepDir $f.Name)) } }
+if($KeepLocalCopy){
+  foreach($f in $files){
+    $relDir = Split-Path ($f.FullName.Substring($StagingPath.Length).TrimStart('\\')) -Parent
+    if([string]::IsNullOrWhiteSpace($relDir)){ $keepTargetDir = $KeepDir } else { $keepTargetDir = Join-Path $KeepDir $relDir }
+    Ensure-Folder $keepTargetDir
+    $dst = Join-Path $keepTargetDir $f.Name
+    Copy-Item -LiteralPath $f.FullName -Destination $dst -Force
+    Log ("kept local copy: {0}" -f $dst)
+  }
+}
 
 foreach($f in $files){
   $inExt=$f.Extension.ToLower()
   if($inExt -eq '.svg'){ continue }
-  $base=[IO.Path]::GetFileNameWithoutExtension($f.Name).ToLower()
   foreach($w in $ResizeWidthsInt){
-    if($ConvertToWebp){ $out=Export-Path $base $w '.webp'; & magick $f.FullName -resize ("{0}x" -f $w) -quality $WebpQuality $out 2>&1 | % { Log ("magick: {0}" -f $_.ToString()) } }
-    else { $out=Export-Path $base $w $inExt; & magick $f.FullName -resize ("{0}x" -f $w) $out 2>&1 | % { Log ("magick: {0}" -f $_.ToString()) } }
+    if($ConvertToWebp){ $out=Export-Path -OriginalFullPath $f.FullName -Width $w -Ext '.webp' -StagingRoot $StagingPath; & magick $f.FullName -resize ("{0}x" -f $w) -quality $WebpQuality $out 2>&1 | % { Log ("magick: {0}" -f $_.ToString()) } }
+    else { $out=Export-Path -OriginalFullPath $f.FullName -Width $w -Ext $inExt -StagingRoot $StagingPath; & magick $f.FullName -resize ("{0}x" -f $w) $out 2>&1 | % { Log ("magick: {0}" -f $_.ToString()) } }
     Log ("variant created: {0}" -f $out)
   }
 }
@@ -84,12 +144,19 @@ if($null -ne $oldNativePref){ $PSNativeCommandUseErrorActionPreference = $oldNat
 foreach($line in $baseOutput){ [void](Add-ContentSafe -Path $PipelineLogPath -Value ($line.ToString())) }
 
 $allUrls=@()
-$re='https://raw\.githubusercontent\.com/[^\s"]+'
-foreach($line in $baseOutput){ foreach($m in [regex]::Matches($line.ToString(),$re)){ $allUrls += $m.Value } }
+$re='https://raw\.githubusercontent\.com/.+'
+foreach($line in $baseOutput){
+  foreach($m in [regex]::Matches($line.ToString(),$re)){
+    $u = $m.Value.Trim()
+    $u = $u -replace ' ','%20'
+    $allUrls += $u
+  }
+}
 $allUrls = $allUrls | Sort-Object -Unique
 foreach($u in $allUrls){ Log-Url -FileName ([IO.Path]::GetFileName($u)) -Url $u }
 
-Copy-UrlsToClipboard -Urls $allUrls
-if($allUrls.Count -gt 0){ Notify-User -Message ("Asset pipeline complete. Copied {0} URL(s) to clipboard." -f $allUrls.Count) }
+$clipOk = Copy-UrlsToClipboard -Urls $allUrls
+if($clipOk){ Log ("clipboard copied urls={0}" -f $allUrls.Count) } else { Log 'clipboard copy failed' }
+if($allUrls.Count -gt 0){ [void](Show-Notification -Title 'FENIX Asset Pipeline' -Message ("Uploaded {0} URL(s). Clipboard ready." -f $allUrls.Count)) }
 
 Log ("end | urls={0}" -f $allUrls.Count)
