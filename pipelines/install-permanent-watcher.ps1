@@ -24,3 +24,4 @@ if(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue){ Stop-Sc
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal | Out-Null
 Start-ScheduledTask -TaskName $taskName
 Write-Output "Installed and started: $taskName"
+
